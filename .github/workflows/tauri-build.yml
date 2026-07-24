@@ -1,0 +1,33 @@
+name: "build-tauri"
+
+on:
+  push:
+    branches:
+      - rust
+
+jobs:
+  build-tauri:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: install frontend dependencies
+        working-directory: ./app
+        run: npm install
+
+      - name: build tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: "./app"
+          tauriScript: "npm run tauri"
+          args: "--target x86_64-pc-windows-msvc"
