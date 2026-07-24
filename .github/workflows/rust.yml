@@ -1,0 +1,36 @@
+name: Rust Build and Test
+
+on:
+  push:
+    branches: [ "rust_v3", "main", "master" ]
+  pull_request:
+    branches: [ "rust_v3", "main", "master" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_PROJECT_PATH: src/sim_model_rs
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Build
+      run: cargo build --release --verbose
+      working-directory: ${{ env.RUST_PROJECT_PATH }}
+
+    - name: Run tests
+      run: cargo test --verbose
+      working-directory: ${{ env.RUST_PROJECT_PATH }}
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sim_model_rs-windows-latest
+        path: ${{ env.RUST_PROJECT_PATH }}/target/release/sim_model_rs.exe
