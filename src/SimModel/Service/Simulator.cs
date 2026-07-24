@@ -165,6 +165,12 @@ namespace SimModel.Service
                             {
                                 subResult.Add(exSkill);
                             }
+                            else
+                            {
+                                // このレベルで解が無い場合、より高いレベルは制約が厳しくなるだけで
+                                // 必ず解無しになるため、以降のレベル探索を打ち切る
+                                break;
+                            }
                         }
                     }
 

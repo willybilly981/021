@@ -77,6 +77,11 @@ namespace SimModel.Domain
         public bool IsCanceling { get; set; } = false;
 
         /// <summary>
+        /// 検索対象の全装備一覧(武器・防具・護石・装飾品をまとめてキャッシュ)
+        /// </summary>
+        private List<Equipment> AllEquips { get; set; }
+
+        /// <summary>
         /// 検索対象の武器一覧
         /// </summary>
         private List<Weapon> Weapons { get; set; }
@@ -167,6 +172,11 @@ namespace SimModel.Domain
                 Charms = new List<Equipment>() { condition.FixCharm };
             }
 
+            // 全装備一覧を一度だけ構築してキャッシュ(以降のUnion連鎖を排除)
+            AllEquips = Weapons.Cast<Equipment>()
+                .Union(Heads).Union(Bodys).Union(Arms).Union(Waists).Union(Legs)
+                .Union(Charms).Union(Masters.Decos).ToList();
+
             SimSolver = Solver.CreateSolver("SCIP");
 
             // 変数設定
@@ -175,11 +185,8 @@ namespace SimModel.Domain
             // 制約式設定
             SetConstraints();
 
-            // 目的関数設定(防御力)
-            SetObjective();
-
-            // 係数設定(防具データ)
-            SetDatas();
+            // 目的関数・係数設定(防御力・防具データを1パスで設定)
+            SetObjectiveAndDatas();
         }
 
         /// <summary>
@@ -239,9 +246,7 @@ namespace SimModel.Domain
         private void SetVariables()
         {
             // 各装備は0個以上で整数
-            var equips = Weapons.Union(Heads).Union(Bodys).Union(Arms).Union(Waists).Union(Legs)
-                .Union(Charms).Union(Masters.Decos);
-            foreach (var equip in equips)
+            foreach (var equip in AllEquips)
             {
                 string key = EquipColPrefix + equip.Name;
                 Variable value;
@@ -353,23 +358,34 @@ namespace SimModel.Domain
         }
 
         /// <summary>
-        /// 目的関数設定(防御力)
+        /// 目的関数(防御力)と防具データの係数を1パスで設定する
         /// </summary>
-        /// <param name="solver">ソルバ</param>
-        /// <param name="x">変数の配列</param>
-        private void SetObjective()
+        private void SetObjectiveAndDatas()
         {
             Objective objective = SimSolver.Objective();
 
-            // 各装備の防御力が、目的関数における各装備の項の係数となる
-            var equips = Weapons.Union(Heads).Union(Bodys).Union(Arms).Union(Waists).Union(Legs)
-                .Union(Charms).Union(Masters.Decos);
-            foreach (var equip in equips)
+            // 全装備を1パスで走査し、目的関数の係数と制約の係数を同時に設定する
+            foreach (var equip in AllEquips)
             {
                 string key = EquipColPrefix + equip.Name;
-                objective.SetCoefficient(Variables[key], Score(equip));
+                Variable xvar = Variables[key];
+
+                // 各装備の防御力が、目的関数における各装備の項の係数となる
+                objective.SetCoefficient(xvar, Score(equip));
+
+                // 防具データを制約の係数として設定
+                SetEquipData(xvar, equip);
             }
             objective.SetMaximization();
+
+            // 除外固定データ
+            foreach (var clude in Masters.Cludes)
+            {
+                if (Constraints.ContainsKey(CludeRowPrefix + clude.Name) && Variables.ContainsKey(EquipColPrefix + clude.Name))
+                {
+                    Constraints[CludeRowPrefix + clude.Name].SetCoefficient(Variables[EquipColPrefix + clude.Name], 1);
+                }
+            }
         }
 
         /// <summary>
@@ -417,30 +433,6 @@ namespace SimModel.Domain
             score += slot1 + slot2 + slot3;
 
             return score;
-        }
-
-        /// <summary>
-        /// 係数設定(防具データ)
-        /// </summary>
-        private void SetDatas()
-        {
-            // 防具データ
-            var equips = Weapons.Union(Heads).Union(Bodys).Union(Arms).Union(Waists).Union(Legs)
-                .Union(Charms).Union(Masters.Decos);
-            foreach (var equip in equips)
-            {
-                string key = EquipColPrefix + equip.Name;
-                SetEquipData(Variables[key], equip);
-            }
-
-            // 除外固定データ
-            foreach (var clude in Masters.Cludes)
-            {
-                if(Constraints.ContainsKey(CludeRowPrefix + clude.Name) && Variables.ContainsKey(EquipColPrefix + clude.Name))
-                {
-                    Constraints[CludeRowPrefix + clude.Name].SetCoefficient(Variables[EquipColPrefix + clude.Name], 1);
-                }
-            }
         }
 
         /// <summary>
@@ -495,10 +487,10 @@ namespace SimModel.Domain
                     weaponSlotCond[i] = weaponSlotCond[i] * -1;
                 }
             }
-            Constraints[WeaponSlot1RowName].SetCoefficient(xvar, weaponSlotCond[0]);
-            Constraints[WeaponSlot2RowName].SetCoefficient(xvar, weaponSlotCond[1]);
-            Constraints[WeaponSlot3RowName].SetCoefficient(xvar, weaponSlotCond[2]);
-            Constraints[WeaponSlot4RowName].SetCoefficient(xvar, weaponSlotCond[3]);
+            SetSlotCoefficient(xvar, WeaponSlot1RowName, weaponSlotCond[0]);
+            SetSlotCoefficient(xvar, WeaponSlot2RowName, weaponSlotCond[1]);
+            SetSlotCoefficient(xvar, WeaponSlot3RowName, weaponSlotCond[2]);
+            SetSlotCoefficient(xvar, WeaponSlot4RowName, weaponSlotCond[3]);
 
             // スロット情報(防具スキル)
             int[] armorSlotCond = SlotCalc(equip, false, true);
@@ -509,10 +501,10 @@ namespace SimModel.Domain
                     armorSlotCond[i] = armorSlotCond[i] * -1;
                 }
             }
-            Constraints[ArmorSlot1RowName].SetCoefficient(xvar, armorSlotCond[0]);
-            Constraints[ArmorSlot2RowName].SetCoefficient(xvar, armorSlotCond[1]);
-            Constraints[ArmorSlot3RowName].SetCoefficient(xvar, armorSlotCond[2]);
-            Constraints[ArmorSlot4RowName].SetCoefficient(xvar, armorSlotCond[3]);
+            SetSlotCoefficient(xvar, ArmorSlot1RowName, armorSlotCond[0]);
+            SetSlotCoefficient(xvar, ArmorSlot2RowName, armorSlotCond[1]);
+            SetSlotCoefficient(xvar, ArmorSlot3RowName, armorSlotCond[2]);
+            SetSlotCoefficient(xvar, ArmorSlot4RowName, armorSlotCond[3]);
 
             // スロット情報(全スキル)
             int[] allSlotCond = SlotCalc(equip, true, true);
@@ -523,21 +515,21 @@ namespace SimModel.Domain
                     allSlotCond[i] = allSlotCond[i] * -1;
                 }
             }
-            Constraints[AllSlot1RowName].SetCoefficient(xvar, allSlotCond[0]);
-            Constraints[AllSlot2RowName].SetCoefficient(xvar, allSlotCond[1]);
-            Constraints[AllSlot3RowName].SetCoefficient(xvar, allSlotCond[2]);
-            Constraints[AllSlot4RowName].SetCoefficient(xvar, allSlotCond[3]);
+            SetSlotCoefficient(xvar, AllSlot1RowName, allSlotCond[0]);
+            SetSlotCoefficient(xvar, AllSlot2RowName, allSlotCond[1]);
+            SetSlotCoefficient(xvar, AllSlot3RowName, allSlotCond[2]);
+            SetSlotCoefficient(xvar, AllSlot4RowName, allSlotCond[3]);
 
-            // 防御・耐性情報
-            Constraints[DefRowName].SetCoefficient(xvar, equip.Maxdef);
-            Constraints[FireRowName].SetCoefficient(xvar, equip.Fire);
-            Constraints[WaterRowName].SetCoefficient(xvar, equip.Water);
-            Constraints[ThunderRowName].SetCoefficient(xvar, equip.Thunder);
-            Constraints[IceRowName].SetCoefficient(xvar, equip.Ice);
-            Constraints[DragonRowName].SetCoefficient(xvar, equip.Dragon);
+            // 防御・耐性情報(係数0は設定を省略し行列を疎に保つ)
+            if (equip.Maxdef != 0) Constraints[DefRowName].SetCoefficient(xvar, equip.Maxdef);
+            if (equip.Fire != 0) Constraints[FireRowName].SetCoefficient(xvar, equip.Fire);
+            if (equip.Water != 0) Constraints[WaterRowName].SetCoefficient(xvar, equip.Water);
+            if (equip.Thunder != 0) Constraints[ThunderRowName].SetCoefficient(xvar, equip.Thunder);
+            if (equip.Ice != 0) Constraints[IceRowName].SetCoefficient(xvar, equip.Ice);
+            if (equip.Dragon != 0) Constraints[DragonRowName].SetCoefficient(xvar, equip.Dragon);
 
             // 攻撃力情報
-            if (equip is Weapon weapon)
+            if (equip is Weapon weapon && weapon.Attack != 0)
             {
                 Constraints[AttackRowName].SetCoefficient(xvar, weapon.Attack);
             }
@@ -712,6 +704,20 @@ namespace SimModel.Domain
         private bool IsDuplicateEquipName(string newName, string oldName)
         {
             return string.IsNullOrWhiteSpace(newName) || newName.Equals(oldName);
+        }
+
+        /// <summary>
+        /// スロット制約の係数を設定(0の場合は設定を省略し行列を疎に保つ)
+        /// </summary>
+        /// <param name="xvar">変数</param>
+        /// <param name="rowName">制約名</param>
+        /// <param name="coefficient">係数</param>
+        private void SetSlotCoefficient(Variable xvar, string rowName, int coefficient)
+        {
+            if (coefficient != 0)
+            {
+                Constraints[rowName].SetCoefficient(xvar, coefficient);
+            }
         }
 
         /// <summary>
