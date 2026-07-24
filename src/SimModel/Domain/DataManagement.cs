@@ -1,0 +1,529 @@
+﻿using SimModel.Config;
+using SimModel.Model;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace SimModel.Domain
+{
+    /// <summary>
+    /// データ管理クラス
+    /// </summary>
+    static internal class DataManagement
+    {
+        /// <summary>
+        /// 最近使ったスキルの記憶容量
+        /// </summary>
+        static public int MaxRecentSkillCount { get; } = LogicConfig.Instance.MaxRecentSkillCount;
+
+        /// <summary>
+        /// 除外設定を追加
+        /// </summary>
+        /// <param name="name">防具名</param>
+        /// <returns>除外情報</returns>
+        static internal Clude? AddExclude(string name)
+        {
+            Equipment? equip = Masters.GetEquipByName(name);
+            if ((equip == null) ||
+                ((equip is Weapon weapon) && (weapon.WeaponType == WeaponType.指定なし)))
+            {
+                // スロット指定用の武器は除外しない
+                return null;
+            }
+            if (equip.IsVirtual)
+            {
+                // 仮想装備は処理しない
+                return null;
+            }
+            return AddClude(equip.Name, CludeKind.exclude);
+        }
+
+        /// <summary>
+        /// 固定設定を追加
+        /// </summary>
+        /// <param name="name">防具名</param>
+        /// <returns>固定情報</returns>
+        static internal Clude? AddInclude(string name)
+        {
+            Equipment? equip = Masters.GetEquipByName(name);
+            if ((equip == null) || 
+                (equip.Kind == EquipKind.deco) ||
+                (equip is Weapon weapon))
+            {
+                // 装飾品と武器は固定しない
+                return null;
+            }
+            if (equip.IsVirtual)
+            {
+                // 仮想装備は処理しない
+                return null;
+            }
+
+            // 同じ装備種類の固定装備があった場合、固定を解除する
+            string? toDelete = null;
+            foreach (var clude in Masters.Cludes)
+            {
+                if (clude.Kind == CludeKind.exclude)
+                {
+                    continue;
+                }
+
+                Equipment? oldEquip = Masters.GetEquipByName(clude.Name);
+                if (oldEquip == null || oldEquip.Kind.Equals(equip.Kind))
+                {
+                    toDelete = clude.Name;
+                }
+            }
+            if(toDelete != null)
+            {
+                DeleteClude(toDelete);
+            }
+
+            // 追加
+            return AddClude(equip.Name, CludeKind.include);
+        }
+
+        /// <summary>
+        /// 指定レア度以下を全て除外設定に追加
+        /// </summary>
+        /// <param name="rare">レア度</param>
+        static internal void ExcludeByRare(int rare)
+        {
+            var equips = Masters.Heads.Union(Masters.Bodys).Union(Masters.Arms).Union(Masters.Waists).Union(Masters.Legs);
+            foreach (var equip in equips)
+            {
+                if (equip.Rare <= rare)
+                {
+                    AddClude(equip.Name, CludeKind.exclude);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 除外・固定の追加
+        /// </summary>
+        /// <param name="name">防具名</param>
+        /// <param name="kind">除外or固定</param>
+        /// <returns>除外固定情報</returns>
+        static private Clude? AddClude(string name, CludeKind kind)
+        {
+            Clude? ret = null;
+
+            bool existClude = false;
+            foreach (var clude in Masters.Cludes)
+            {
+                if (clude.Name.Equals(name))
+                {
+                    // 既に設定がある場合は上書き
+                    clude.Kind = kind;
+                    existClude = true;
+                    ret = clude;
+                }
+            }
+            if (!existClude)
+            {
+                // 設定がない場合は新規作成
+                Clude clude = new();
+                clude.Name = name;
+                clude.Kind = kind;
+                // 追加
+                Masters.Cludes.Add(clude);
+                ret = clude;
+            }
+
+            // マスタへ反映
+            FileOperation.SaveCludeCSV();
+
+            // 追加した設定
+            return ret;
+        }
+
+        /// <summary>
+        /// 除外・固定設定の削除
+        /// </summary>
+        /// <param name="name">防具名</param>
+        static internal void DeleteClude(string name)
+        {
+            foreach (var clude in Masters.Cludes)
+            {
+                if (clude.Name.Equals(name))
+                {
+                    // 削除
+                    Masters.Cludes.Remove(clude);
+                    break;
+                }
+            }
+
+            // マスタへ反映
+            FileOperation.SaveCludeCSV();
+        }
+
+        /// <summary>
+        /// 除外・固定設定の全削除
+        /// </summary>
+        static internal void DeleteAllClude()
+        {
+            Masters.Cludes.Clear();
+
+            // マスタへ反映
+            FileOperation.SaveCludeCSV();
+        }
+
+        /// <summary>
+        /// 防具の除外・固定設定の全削除
+        /// </summary>
+        static internal void DeleteAllArmorClude()
+        {
+            // 武器だけ抽出
+            List<Clude> weaponCludes = new();
+            foreach (var clude in Masters.Cludes)
+            {
+                Equipment equip = Masters.GetEquipByName(clude.Name);
+                if ((equip != null) && (equip is Weapon))
+                {
+                    weaponCludes.Add(clude);
+                }
+            }
+
+            // 抽出したものと入れ替え
+            Masters.Cludes.Clear();
+            Masters.Cludes.AddRange(weaponCludes);
+
+            // マスタへ反映
+            FileOperation.SaveCludeCSV();
+        }
+
+        /// <summary>
+        /// 防具の除外・固定設定の全削除
+        /// </summary>
+        static internal void DeleteAllWeaponClude()
+        {
+            // 防具だけ抽出
+            List<Clude> armorCludes = new();
+            foreach (var clude in Masters.Cludes)
+            {
+                Equipment equip = Masters.GetEquipByName(clude.Name);
+                if ((equip != null) && (equip is not Weapon))
+                {
+                    armorCludes.Add(clude);
+                }
+            }
+
+            // 抽出したものと入れ替え
+            Masters.Cludes.Clear();
+            Masters.Cludes.AddRange(armorCludes);
+
+            // マスタへ反映
+            FileOperation.SaveCludeCSV();
+        }
+
+        /// <summary>
+        /// マイセットの追加
+        /// </summary>
+        /// <param name="set">マイセット</param>
+        /// <returns>追加したマイセット</returns>
+        static internal EquipSet? AddMySet(EquipSet set)
+        {
+            // 削除できる装備(護石・アーティア)について、マスタに存在しているかチェック
+            if (set.Charm != null &&
+                !Masters.Charms.Union(Masters.AdditionalCharms).Any(c => c.Name.Equals(set.Charm.Name)))
+            {
+                return null;
+            }
+            if (set.Weapon != null &&
+                !Masters.Weapons.Union(Masters.Artians).Any(c => c.Name.Equals(set.Weapon.Name)))
+            {
+                return null;
+            }
+
+            // 追加
+            Masters.MySets.Add(set);
+
+            // マスタへ反映
+            FileOperation.SaveMySetCSV();
+
+            return set;
+        }
+
+        /// <summary>
+        /// マイセットの削除
+        /// </summary>
+        /// <param name="set">マイセット</param>
+        static internal void DeleteMySet(EquipSet set)
+        {
+            // 削除
+            Masters.MySets.Remove(set);
+
+            // マスタへ反映
+            FileOperation.SaveMySetCSV();
+        }
+
+        /// <summary>
+        /// マイセットの変更を保存
+        /// </summary>
+        static internal void SaveMySet()
+        {
+            // マスタへ反映
+            FileOperation.SaveMySetCSV();
+        }
+
+        /// <summary>
+        /// マイセットを再読み込み
+        /// </summary>
+        static internal void LoadMySet()
+        {
+            // マスタへ反映
+            FileOperation.LoadMySetCSV();
+        }
+
+        /// <summary>
+        /// 最近使ったスキルの更新
+        /// </summary>
+        /// <param name="skills">検索したスキル</param>
+        internal static void UpdateRecentSkill(List<Skill> skills)
+        {
+            List<string> newNames = new List<string>();
+
+            // 今回の検索条件をリストに追加
+            foreach (var skill in skills)
+            {
+                newNames.Add(skill.Name);
+            }
+
+            // 今までの検索条件をリストに追加
+            foreach (var oldName in Masters.RecentSkillNames)
+            {
+                bool isDuplicate = false;
+                foreach (var newName in newNames)
+                {
+                    if (newName.Equals(oldName))
+                    {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+                if (!isDuplicate)
+                {
+                    newNames.Add(oldName);
+                }
+
+                // 最大数に達したらそこで終了
+                if (MaxRecentSkillCount <= newNames.Count)
+                {
+                    break;
+                }
+            }
+
+            // 新しいリストに入れ替え
+            Masters.RecentSkillNames = newNames;
+
+            // マスタへ反映
+            FileOperation.SaveRecentSkillCSV();
+        }
+
+        /// <summary>
+        /// マイ検索条件の追加
+        /// </summary>
+        /// <param name="condition">検索条件</param>
+        internal static void AddMyCondition(SearchCondition condition)
+        {
+            // 追加
+            Masters.MyConditions.Add(condition);
+
+            // マスタへ反映
+            FileOperation.SaveMyConditionCSV();
+        }
+
+        /// <summary>
+        /// マイ検索条件の削除
+        /// </summary>
+        /// <param name="condition">検索条件</param>
+        internal static void DeleteMyCondition(SearchCondition condition)
+        {
+            // 削除
+            Masters.MyConditions.Remove(condition);
+
+            // マスタへ反映
+            FileOperation.SaveMyConditionCSV();
+        }
+
+        /// <summary>
+        /// マイ検索条件の更新
+        /// </summary>
+        /// <param name="newCondition">新データ</param>
+        internal static void UpdateMyCondition(SearchCondition newCondition)
+        {
+            foreach (var condition in Masters.MyConditions)
+            {
+                if (condition.ID == newCondition.ID)
+                {
+                    condition.DispName = newCondition.DispName;
+                    condition.IsSpecificWeapon = newCondition.IsSpecificWeapon;
+                    condition.WeaponName = newCondition.WeaponName;
+                    condition.WeaponType = newCondition.WeaponType;
+                    condition.MinAttack = newCondition.MinAttack;
+                    condition.Def = newCondition.Def;
+                    condition.Fire = newCondition.Fire;
+                    condition.Water = newCondition.Water;
+                    condition.Thunder = newCondition.Thunder;
+                    condition.Ice = newCondition.Ice;
+                    condition.Dragon = newCondition.Dragon;
+                    condition.Skills = newCondition.Skills;
+
+                    // マスタへ反映
+                    FileOperation.SaveMyConditionCSV();
+
+                    return;
+                }
+            }
+
+            // 万一更新先が見つからなかった場合は新規登録
+            AddMyCondition(newCondition);
+        }
+
+        /// <summary>
+        /// 装飾品の所持数の変更を保存
+        /// </summary>
+        /// <param name="deco">対象の装飾品</param>
+        /// <param name="count">変更後の個数</param>
+        internal static void SaveDecoCount(Deco deco, int count)
+        {
+            deco.DecoCount = count;
+            FileOperation.SaveDecoCountJson();
+        }
+
+        /// <summary>
+        /// マイセットの順番入れ替え
+        /// </summary>
+        /// <param name="dropIndex">入れ替え元</param>
+        /// <param name="targetIndex">入れ替え先</param>
+        internal static void MoveMySet(int dropIndex, int targetIndex)
+        {
+            EquipSet set = Masters.MySets[dropIndex];
+            Masters.MySets.RemoveAt(dropIndex);
+            Masters.MySets.Insert(targetIndex, set);
+
+            FileOperation.SaveMySetCSV();
+        }
+
+        /// <summary>
+        /// 護石の追加
+        /// </summary>
+        /// <param name="charm">護石</param>
+        internal static void AddCharm(Equipment charm)
+        {
+            // 追加
+            Masters.AdditionalCharms.Add(charm);
+
+            // 下位互換の再計算
+            Masters.CalcLowerCharm();
+
+            // マスタへ反映
+            FileOperation.SaveAdditionalCharmCSV();
+        }
+
+        /// <summary>
+        /// 護石の削除
+        /// </summary>
+        /// <param name="condition">検索条件</param>
+        internal static void DeleteCharm(Equipment charm)
+        {
+            // 除外・固定設定があったら削除
+            DeleteClude(charm.Name);
+
+            // この護石を使っているマイセットがあったら削除
+            List<EquipSet> delMySets = new();
+            foreach (var set in Masters.MySets)
+            {
+                if (set.Charm.Name != null && set.Charm.Name.Equals(charm.Name))
+                {
+                    delMySets.Add(set);
+                }
+            }
+            foreach (var set in delMySets)
+            {
+                DeleteMySet(set);
+            }
+
+            // 削除
+            Masters.AdditionalCharms.Remove(charm);
+
+            // 下位互換の再計算
+            Masters.CalcLowerCharm();
+
+            // マスタへ反映
+            FileOperation.SaveAdditionalCharmCSV();
+        }
+
+        /// <summary>
+        /// 護石の順番入れ替え
+        /// </summary>
+        /// <param name="dropIndex">入れ替え元</param>
+        /// <param name="targetIndex">入れ替え先</param>
+        internal static void MoveCharm(int dropIndex, int targetIndex)
+        {
+            Equipment charm = Masters.AdditionalCharms[dropIndex];
+            Masters.AdditionalCharms.RemoveAt(dropIndex);
+            Masters.AdditionalCharms.Insert(targetIndex, charm);
+
+            FileOperation.SaveAdditionalCharmCSV();
+        }
+
+        /// <summary>
+        /// アーティアの追加
+        /// </summary>
+        /// <param name="artian">アーティア</param>
+        internal static void AddArtian(Weapon artian)
+        {
+            // 追加
+            Masters.Artians.Add(artian);
+
+            // マスタへ反映
+            FileOperation.SaveArtianCSV();
+        }
+
+        /// <summary>
+        /// アーティアの順番入れ替え
+        /// </summary>
+        /// <param name="dropIndex">入れ替え元</param>
+        /// <param name="targetIndex">入れ替え先</param>
+        internal static void MoveArtian(int dropIndex, int targetIndex)
+        {
+            Weapon artian = Masters.Artians[dropIndex];
+            Masters.Artians.RemoveAt(dropIndex);
+            Masters.Artians.Insert(targetIndex, artian);
+
+            FileOperation.SaveArtianCSV();
+        }
+
+        /// <summary>
+        /// アーティアの削除
+        /// </summary>
+        /// <param name="artian">アーティア</param>
+        internal static void DeleteArtian(Weapon artian)
+        {
+            // 除外・固定設定があったら削除
+            DeleteClude(artian.Name);
+
+            // この護石を使っているマイセットがあったら削除
+            List<EquipSet> delMySets = new();
+            foreach (var set in Masters.MySets)
+            {
+                if (set.Weapon.Name != null && set.Weapon.Name.Equals(artian.Name))
+                {
+                    delMySets.Add(set);
+                }
+            }
+            foreach (var set in delMySets)
+            {
+                DeleteMySet(set);
+            }
+
+            // 削除
+            Masters.Artians.Remove(artian);
+
+            // マスタへ反映
+            FileOperation.SaveArtianCSV();
+        }
+    }
+}
